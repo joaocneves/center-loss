@@ -1,3 +1,4 @@
+import json
 import os
 import argparse
 
@@ -19,8 +20,6 @@ from imageaug import transform_for_infer, transform_for_training
 def main(args):
     if args.evaluate:
         evaluate(args)
-    elif args.verify_model:
-        verify(args)
     else:
         train(args)
 
@@ -29,7 +28,7 @@ def get_dataset_dir(args):
     home = os.path.expanduser("~")
     dataset_dir = args.dataset_dir if args.dataset_dir else os.path.join(
         'datasets', 'lfw')
-    #dataset_dir = 'C:\\Users\\joao_\\Repos\\face_recognition_softmax\\lfw_funneled\\'
+    # dataset_dir = 'C:\\Users\\joao_\\Repos\\face_recognition_softmax\\lfw_funneled\\'
 
     if not os.path.isdir(dataset_dir):
         os.mkdir(dataset_dir)
@@ -37,12 +36,19 @@ def get_dataset_dir(args):
     return dataset_dir
 
 
+def get_exp_name(args):
+    return args.dataset_dir.split('/')[-1] + '_att' + str(round(args.att_loss_weight, 4))
+
+
 def get_log_dir(args):
     log_dir = args.log_dir if args.log_dir else os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), 'logs_myloss')
+        os.path.dirname(os.path.realpath(__file__)), 'logs\\' + get_exp_name(args))
 
     if not os.path.isdir(log_dir):
-        os.mkdir(log_dir)
+        os.makedirs(log_dir)
+
+    with open(os.path.join(log_dir, 'arg.txt'), 'w') as f:
+        json.dump(args.__dict__, f, indent=2)
 
     return log_dir
 
@@ -66,7 +72,7 @@ def train(args):
     training_set, validation_set, num_classes = create_datasets(dataset_dir)
 
     training_dataset = Dataset(
-            training_set, transform_for_training(model_class.IMAGE_SHAPE))
+        training_set, transform_for_training(model_class.IMAGE_SHAPE))
     validation_dataset = Dataset(
         validation_set, transform_for_infer(model_class.IMAGE_SHAPE))
 
@@ -163,31 +169,7 @@ def evaluate(args):
     print('ROC curve generated at {}'.format(roc_file))
 
 
-def verify(args):
-    dataset_dir = get_dataset_dir(args)
-    log_dir = get_log_dir(args)
-    model_class = get_model_class(args)
-
-    model = model_class(False).to(device)
-    checkpoint = torch.load(args.verify_model)
-    model.load_state_dict(checkpoint['state_dict'], strict=False)
-    model.eval()
-
-    image_a, image_b = args.verify_images.split(',')
-    image_a = transform_for_infer(
-        model_class.IMAGE_SHAPE)(image_loader(image_a))
-    image_b = transform_for_infer(
-        model_class.IMAGE_SHAPE)(image_loader(image_b))
-    images = torch.stack([image_a, image_b]).to(device)
-
-    _, (embedings_a, embedings_b) = model(images)
-
-    distance = torch.sum(torch.pow(embedings_a - embedings_b, 2)).item()
-    print("distance: {}".format(distance))
-
-
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser(description='center loss example')
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 256)')
@@ -217,10 +199,7 @@ if __name__ == '__main__':
     parser.add_argument('--roc', type=str,
                         help='path of roc.png to generated '
                              '(default: $DATASET_DIR/roc.png)')
-    parser.add_argument('--verify-model', type=str,
-                        help='verify 2 images of face belong to one person,'
-                             'the param is the model to use')
-    parser.add_argument('--verify-images', type=str,
+    parser.add_argument('--att_loss_weight', type=float, default=0.5,
                         help='verify 2 images of face belong to one person,'
                              'split image pathes by comma')
 

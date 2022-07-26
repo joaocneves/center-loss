@@ -38,7 +38,7 @@ class Trainer(object):
 
         if not self.log_dir:
             self.log_dir = os.path.join(os.path.dirname(
-                os.path.realpath(__file__)), 'logs_myloss')
+                os.path.realpath(__file__)), 'logs')
         if not os.path.isdir(self.log_dir):
             os.mkdir(self.log_dir)
 
@@ -209,7 +209,7 @@ class Trainer(object):
         #all_features_2d = TSNE(n_components=2, init = 'random').fit_transform(all_features)
         all_labels = np.hstack(all_labels)
 
-        dirname = osp.join('logs_myloss', prefix)
+        dirname = osp.join('logs', prefix)
         if not osp.exists(dirname):
             os.mkdir(dirname)
         save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.npz')
@@ -229,7 +229,7 @@ class Trainer(object):
 
         plt.scatter(features[:, 0], features[:, 1])
 
-        dirname = osp.join('logs_myloss', prefix)
+        dirname = osp.join('logs', prefix)
         if not osp.exists(dirname):
             os.mkdir(dirname)
         save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.png')
