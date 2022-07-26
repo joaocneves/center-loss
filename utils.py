@@ -30,7 +30,8 @@ def download(dir, url, dist=None):
 
 
 def image_loader(image_path):
-    return cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2GRAY)
+    return cv2.imread(image_path)
+    #return cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2GRAY)
 
 
 def generate_roc_curve(fpr, tpr, path):

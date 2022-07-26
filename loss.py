@@ -12,7 +12,6 @@ def compute_center_loss(features, centers, targets):
 
 def compute_relative_loss(features, centers, targets, soft_feat):
 
-
     batch_size = features.size(0)
     num_classes = centers.size(0)
     soft_feat_per_label = soft_feat[targets]
@@ -32,7 +31,7 @@ def compute_relative_loss(features, centers, targets, soft_feat):
     #loss = dist.clamp(min=1e-12, max=1e+12).sum()
 
     criterion = torch.nn.MSELoss()
-    loss = criterion(distmat, relative_dist_mat)*10
+    loss = criterion(distmat, relative_dist_mat)
 
     return loss
 

@@ -8,7 +8,7 @@ import numpy as np
 
 from dataset import Dataset, create_datasets, LFWPairedDataset
 from loss import compute_center_loss, get_center_delta
-from models import ConvNet
+from models import ConvNet, Resnet50FaceModel, Resnet18FaceModel
 from device import device
 from trainer import Trainer
 from utils import download, generate_roc_curve, image_loader
@@ -28,7 +28,7 @@ def main(args):
 def get_dataset_dir(args):
     home = os.path.expanduser("~")
     dataset_dir = args.dataset_dir if args.dataset_dir else os.path.join(
-        'datasets', 'mnist')
+        'datasets', 'lfw')
     #dataset_dir = 'C:\\Users\\joao_\\Repos\\face_recognition_softmax\\lfw_funneled\\'
 
     if not os.path.isdir(dataset_dir):
@@ -39,7 +39,7 @@ def get_dataset_dir(args):
 
 def get_log_dir(args):
     log_dir = args.log_dir if args.log_dir else os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), 'logs')
+        os.path.dirname(os.path.realpath(__file__)), 'logs_myloss')
 
     if not os.path.isdir(log_dir):
         os.mkdir(log_dir)
@@ -48,8 +48,12 @@ def get_log_dir(args):
 
 
 def get_model_class(args):
-
-    model_class = ConvNet
+    if args.arch == 'convnet':
+        model_class = ConvNet
+    if args.arch == 'resnet18':
+        model_class = Resnet18FaceModel
+    if args.arch == 'resnet50':
+        model_class = Resnet50FaceModel
 
     return model_class
 
@@ -80,7 +84,7 @@ def train(args):
         shuffle=False
     )
 
-    model = model_class(num_classes).to(device)
+    model = model_class(num_classes, feature_dim=2048).to(device)
 
     trainables_wo_bn = [param for name, param in model.named_parameters() if
                         param.requires_grad and 'bn' not in name]
@@ -118,7 +122,7 @@ def evaluate(args):
     dataset = LFWPairedDataset(
         dataset_dir, pairs_path, transform_for_infer(model_class.IMAGE_SHAPE))
     dataloader = DataLoader(dataset, batch_size=args.batch_size, num_workers=4)
-    model = model_class(False).to(device)
+    model = model_class(False, feature_dim=2).to(device)
 
     checkpoint = torch.load(args.evaluate)
     model.load_state_dict(checkpoint['state_dict'], strict=False)
@@ -185,7 +189,7 @@ def verify(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='center loss example')
-    parser.add_argument('--batch_size', type=int, default=256, metavar='N',
+    parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 256)')
     parser.add_argument('--log_dir', type=str,
                         help='log directory')

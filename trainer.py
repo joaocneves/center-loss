@@ -38,7 +38,7 @@ class Trainer(object):
 
         if not self.log_dir:
             self.log_dir = os.path.join(os.path.dirname(
-                os.path.realpath(__file__)), 'logs')
+                os.path.realpath(__file__)), 'logs_myloss')
         if not os.path.isdir(self.log_dir):
             os.mkdir(self.log_dir)
 
@@ -66,22 +66,9 @@ class Trainer(object):
 
     def run_epoch(self, mode):
 
-        soft_feat = \
-            [[1, 1, 1, 0, 1, 1, 1],
-             [0, 0, 0, 0, 0, 1, 1],
-             [0, 1, 1, 1, 1, 1, 0],
-             [0, 0, 1, 1, 1, 1, 1],
-             [1, 0, 0, 1, 0, 1, 1],
-             [1, 0, 1, 1, 1, 0, 1],
-             [1, 1, 1, 1, 1, 0, 1],
-             [0, 0, 1, 0, 0, 1, 1],
-             [1, 1, 1, 1, 1, 1, 1],
-             [1, 0, 1, 1, 1, 1, 1]]
-
-        soft_feat = np.array(soft_feat).astype('float32')
-        soft_feat = torch.tensor(soft_feat)
-
-
+        soft_feat = np.load('datasets/lfw/atts_lfw.npy')
+        soft_feat = torch.tensor(soft_feat.astype('float32'))
+        soft_feat = soft_feat.to(device)
 
         if mode == 'train':
             dataloader = self.training_dataloader
@@ -108,15 +95,17 @@ class Trainer(object):
                 centers = self.model.centers
 
                 logits, features = self.model(images)
+                #print(features.shape)
 
                 cross_entropy_loss = torch.nn.functional.cross_entropy(
                     logits, targets)
-                #center_loss = compute_center_loss(features, centers, targets)
+                center_loss = compute_center_loss(features, centers, targets)
                 relative_loss = compute_relative_loss(features, centers, targets, soft_feat)
                 center_loss = relative_loss
-                loss = cross_entropy_loss + relative_loss*0.2
+                loss = cross_entropy_loss + center_loss + relative_loss*0.5
 
-                if (batch + 1) % 25 == 0:
+                if (batch + 1) % 20 == 0:
+                    #print(centers)
                     print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
                           "{:.8f} - total weighted loss: {:.8f}".format(
                               mode, self.current_epoch,
@@ -142,8 +131,9 @@ class Trainer(object):
                 total_top1_matches += self._get_matches(targets, logits, 1)
                 total_top3_matches += self._get_matches(targets, logits, 3)
 
-            all_features, all_labels, all_features_2d = self.get_dataset_feat(dataloader)
-            self.plot_features(all_features_2d, all_labels, num_classes=centers.size(0), epoch=self.current_epoch, prefix=mode)
+            all_features, all_labels, all_features_2d = self.get_dataset_feat(dataloader, epoch=self.current_epoch, prefix=mode)
+            self.plot_features(all_features, epoch=self.current_epoch, prefix=mode)
+            #self.plot_features(all_features_2d, all_labels, num_classes=centers.size(0), epoch=self.current_epoch, prefix=mode)
 
 
 
@@ -159,7 +149,6 @@ class Trainer(object):
             loss_recorder['top1acc'].append(top1_acc)
             loss_recorder['top3acc'].append(top3_acc)
 
-
             print(
                 "[{}:{}] finished. cross entropy loss: {:.8f} - "
                 "center loss: {:.8f} - together: {:.8f} - "
@@ -168,11 +157,6 @@ class Trainer(object):
                     center_loss.item(), loss.item(),
                     top1_acc*100, top3_acc*100))
 
-            if mode == 'train':
-                self.training_losses = loss_recorder
-
-            else:
-                self.validation_losses = loss_recorder
 
 
     def _get_matches(self, targets, logits, n=1):
@@ -201,7 +185,7 @@ class Trainer(object):
         torch.save(state, state_path)
 
 
-    def get_dataset_feat(self, dataloader):
+    def get_dataset_feat(self, dataloader, epoch, prefix):
 
         all_features, all_labels = [], []
         batch = 0
@@ -209,16 +193,15 @@ class Trainer(object):
         for images, targets, names in dataloader:
 
             batch = batch + 1
-            if batch == 500:
-                break
+
             targets = torch.tensor(targets).to(device)
             images = images.to(device)
             centers = self.model.centers
 
             logits, features = self.model(images)
 
-            all_features.append(features.detach().numpy())
-            all_labels.append(targets.detach().numpy())
+            all_features.append(features.detach().cpu().numpy())
+            all_labels.append(targets.detach().cpu().numpy())
 
         # convert to np.array
         all_features = np.vstack(all_features)
@@ -226,25 +209,52 @@ class Trainer(object):
         #all_features_2d = TSNE(n_components=2, init = 'random').fit_transform(all_features)
         all_labels = np.hstack(all_labels)
 
+        dirname = osp.join('logs_myloss', prefix)
+        if not osp.exists(dirname):
+            os.mkdir(dirname)
+        save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.npz')
+        np.savez(save_name, features=all_features, labels=all_labels)
+
         return all_features, all_labels, all_features_2d
 
 
-    def plot_features(self, features, labels, num_classes, epoch, prefix):
+    def plot_features(self, features, epoch, prefix):
+
+        """Plot features on 2D plane.
+
+                Args:
+                    features: (num_instances, num_features).
+                    labels: (num_instances).
+                """
+
+        plt.scatter(features[:, 0], features[:, 1])
+
+        dirname = osp.join('logs_myloss', prefix)
+        if not osp.exists(dirname):
+            os.mkdir(dirname)
+        save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.png')
+        plt.savefig(save_name, bbox_inches='tight')
+        # plt.show()
+        plt.close()
+
+
+    def plot_features_per_class(self, features, labels, num_classes, epoch, prefix):
         """Plot features on 2D plane.
 
         Args:
             features: (num_instances, num_features).
             labels: (num_instances).
         """
-        colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
-        for label_idx in range(num_classes):
+        colors = ['C' + str(i) for i in range(10)]
+        for label_idx in range(10):#num_classes):
             plt.scatter(
                 features[labels == label_idx, 0],
                 features[labels == label_idx, 1],
                 c=colors[label_idx],
                 s=1,
             )
-        plt.legend(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], loc='upper right')
+        plt_labels = [str(i) for i in range(10)]
+        plt.legend(plt_labels, loc='upper right')
         dirname = osp.join('logs', prefix)
         if not osp.exists(dirname):
             os.mkdir(dirname)
