@@ -3,3 +3,4 @@ logs
 *.pth
 datasets/*
 .idea/*
+*.npz
