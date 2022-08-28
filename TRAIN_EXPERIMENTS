@@ -1,0 +1,5 @@
+python3 main.py --experiment_name img_size_112 \
+--loss center-loss --batch_size 128 \
+--train_dataset_dir /home/socialab/Desktop/Joao/datasets/casiawebface-aligned_insight \
+--test_dataset_dir /home/socialab/Desktop/Joao/datasets/lfw-aligned_insight \
+--pairs datasets/lfw/pairs.txt

@@ -12,7 +12,8 @@ DATASET_TARBALL = "http://vis-www.cs.umass.edu/lfw/lfw-deepfunneled.tgz"
 PAIRS_TRAIN = "http://vis-www.cs.umass.edu/lfw/pairsDevTrain.txt"
 PAIRS_VAL = "http://vis-www.cs.umass.edu/lfw/pairsDevTest.txt"
 
-def create_datasets(dataroot, train_val_split=0.7):
+def create_datasets(dataroot, train_val_split=0.9):
+    """
     if not os.path.isdir(dataroot):
         os.mkdir(dataroot)
 
@@ -28,11 +29,12 @@ def create_datasets(dataroot, train_val_split=0.7):
 
     images_root = os.path.join(dataroot, 'lfw-deepfunneled')
     names = os.listdir(images_root)
-    names.sort()
-    names_txt = open("datasets/lfw/persons_lfw.txt", "r").read().split('\n')
-
-    assert names == names_txt
-
+    """
+    
+    dataset_name = dataroot.split('/')[-1]
+    images_root = dataroot # os.path.join(dataroot, dataset_name + '-aligned')
+    names = os.listdir(images_root)
+    
     if len(names) == 0:
         raise RuntimeError('Empty dataset')
 
@@ -51,7 +53,7 @@ def create_datasets(dataroot, train_val_split=0.7):
                 images_of_person[:ceil(total * train_val_split)])
         validation_set += map(
                 add_class,
-                images_of_person[ceil(total * train_val_split):])
+                images_of_person[floor(total * train_val_split):])
 
     return training_set, validation_set, len(names)
 
@@ -117,11 +119,11 @@ class LFWPairedDataset(PairedDataset):
                     pair[0], pair[2], int(pair[1]), int(pair[3])
 
             self.image_names_a.append(os.path.join(
-                    self.dataroot, 'lfw-deepfunneled',
+                    self.dataroot,
                     name1, "{}_{:04d}.jpg".format(name1, index1)))
 
             self.image_names_b.append(os.path.join(
-                    self.dataroot, 'lfw-deepfunneled',
+                    self.dataroot,
                     name2, "{}_{:04d}.jpg".format(name2, index2)))
             self.matches.append(match)
 

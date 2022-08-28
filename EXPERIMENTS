@@ -1,0 +1,3 @@
+python3 main.py --loss center-loss --batch_size 128 --dataset_dir /home/socialab/Desktop/Joao/datasets/casiawebface-aligned_insight --test_set_path /home/socialab/Desktop/Joao/datasets/lfw-aligned_insight --pairs datasets/lfw/pairs.txt
+
+--batch_size 1 --weights logs/models/epoch_50.pth.tar --test_dataset_dir /home/socialab/Desktop/Joao/datasets/lfw-aligned_insight --pairs datasets/lfw/pairs.txt

@@ -1,25 +1,25 @@
 import os
 
 import torch
-import numpy as np
-from matplotlib import pyplot as plt
-from sklearn.manifold import TSNE
-import os.path as osp
 
 from device import device
-from loss import compute_center_loss, get_center_delta, compute_relative_loss
+from loss import compute_center_loss, get_center_delta
+
+from eval import evaluate
 
 
 class Trainer(object):
 
     def __init__(
-            self, optimizer, model, training_dataloader,
-            validation_dataloader, log_dir=False, max_epoch=100, resume=False,
-            persist_stride=5, lamda=0.03, alpha=0.5):
+            self, optimizer, model, loss, training_dataloader,
+            validation_dataloader, test_set_path, log_dir=False, experiment_name='', max_epoch=100, resume=False,
+            persist_stride=2, lamda=3, alpha=0.5):
 
         self.log_dir = log_dir
+        self.experiment_name = experiment_name
         self.optimizer = optimizer
         self.model = model
+        self.loss = loss
         self.max_epoch = max_epoch
         self.resume = resume
         self.persist_stride = persist_stride
@@ -35,6 +35,7 @@ class Trainer(object):
         self.current_epoch = 1
         self.lamda = lamda
         self.alpha = alpha
+        self.test_set_path = test_set_path
 
         if not self.log_dir:
             self.log_dir = os.path.join(os.path.dirname(
@@ -43,15 +44,19 @@ class Trainer(object):
             os.mkdir(self.log_dir)
 
         if resume:
-            state_file = os.path.join(self.log_dir, 'models', resume)
+            state_file = os.path.join(self.log_dir, self.experiment_name, resume)
             if not os.path.isfile(state_file):
                 raise RuntimeError(
                     "resume file {} is not found".format(state_file))
             print("loading checkpoint {}".format(state_file))
             checkpoint = torch.load(state_file)
             self.start_epoch = self.current_epoch = checkpoint['epoch']
+
+            pretrained_dict = checkpoint['state_dict']
+            #pretrained_dict = {k: v for k, v in pretrained_dict.items() if k.startswith('base')}
+
             self.model.load_state_dict(checkpoint['state_dict'], strict=True)
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            #self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.training_losses = checkpoint['training_losses']
             self.validation_losses = checkpoint['validation_losses']
             print("loaded checkpoint {} (epoch {})".format(
@@ -65,11 +70,6 @@ class Trainer(object):
                 self.persist()
 
     def run_epoch(self, mode):
-
-        soft_feat = np.load('datasets/lfw/atts_lfw.npy')
-        soft_feat = torch.tensor(soft_feat.astype('float32'))
-        soft_feat = soft_feat.to(device)
-
         if mode == 'train':
             dataloader = self.training_dataloader
             loss_recorder = self.training_losses
@@ -86,34 +86,37 @@ class Trainer(object):
         total_top3_matches = 0
         batch = 0
 
+
         with torch.set_grad_enabled(mode == 'train'):
             for images, targets, names in dataloader:
                 batch += 1
-
                 targets = torch.tensor(targets).to(device)
                 images = images.to(device)
                 centers = self.model.centers
 
                 logits, features = self.model(images)
-                #print(features.shape)
 
                 cross_entropy_loss = torch.nn.functional.cross_entropy(
                     logits, targets)
-                center_loss = compute_center_loss(features, centers, targets)
-                relative_loss = compute_relative_loss(features, centers, targets, soft_feat)
-                center_loss = relative_loss
-                loss = cross_entropy_loss + center_loss + relative_loss*0.5
-
-                if (batch + 1) % 20 == 0:
-                    #print(centers)
+                if self.loss == 'softmax':
+                    loss = cross_entropy_loss
+                elif self.loss == 'center-loss':
+                    center_loss = compute_center_loss(features, centers, targets)
+                    loss = self.lamda * center_loss + cross_entropy_loss
+                elif self.loss == 'attribute-loss':
+                    loss = self.lamda * center_loss + cross_entropy_loss
+                
+                if (batch + 1) % 500 == 0:
                     print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
                           "{:.8f} - total weighted loss: {:.8f}".format(
                               mode, self.current_epoch,
                               cross_entropy_loss.item(),
                               center_loss.item(), loss.item()))
 
+
                 total_cross_entropy_loss += cross_entropy_loss
-                total_center_loss += center_loss
+                if self.loss == 'center-loss':
+                    total_center_loss += center_loss
                 total_loss += loss
 
                 if mode == 'train':
@@ -121,43 +124,50 @@ class Trainer(object):
                     loss.backward()
                     self.optimizer.step()
 
-                    # make features untrack by autograd, or there will be
-                    # a memory leak when updating the centers
-                    center_deltas = get_center_delta(
-                        features.data, centers, targets, self.alpha)
-                    self.model.centers = centers - center_deltas
+                    if self.loss == 'center-loss':
+                        # make features untrack by autograd, or there will be
+                        # a memory leak when updating the centers
+                        center_deltas = get_center_delta(
+                            features.data, centers, targets, self.alpha)
+                        self.model.centers = centers - center_deltas
 
                 # compute acc here
                 total_top1_matches += self._get_matches(targets, logits, 1)
                 total_top3_matches += self._get_matches(targets, logits, 3)
 
-            all_features, all_labels, all_features_2d = self.get_dataset_feat(dataloader, epoch=self.current_epoch, prefix=mode)
-            self.plot_features(all_features, epoch=self.current_epoch, prefix=mode)
-            #self.plot_features(all_features_2d, all_labels, num_classes=centers.size(0), epoch=self.current_epoch, prefix=mode)
 
-
-
-            center_loss = total_center_loss / batch
             cross_entropy_loss = total_cross_entropy_loss / batch
-            loss = center_loss + cross_entropy_loss
+            if self.loss == 'softmax':
+                loss = cross_entropy_loss
+            elif self.loss == 'center-loss':
+                center_loss = total_center_loss / batch
+                loss = center_loss + cross_entropy_loss
             top1_acc = total_top1_matches / len(dataloader.dataset)
             top3_acc = total_top3_matches / len(dataloader.dataset)
 
-            loss_recorder['center'].append(total_center_loss/batch)
+            if self.loss == 'center-loss':
+                loss_recorder['center'].append(total_center_loss/batch)
             loss_recorder['cross_entropy'].append(cross_entropy_loss)
             loss_recorder['together'].append(total_loss/batch)
             loss_recorder['top1acc'].append(top1_acc)
             loss_recorder['top3acc'].append(top3_acc)
 
-            print(
-                "[{}:{}] finished. cross entropy loss: {:.8f} - "
-                "center loss: {:.8f} - together: {:.8f} - "
-                "top1 acc: {:.4f} % - top3 acc: {:.4f} %".format(
-                    mode, self.current_epoch, cross_entropy_loss.item(),
-                    center_loss.item(), loss.item(),
-                    top1_acc*100, top3_acc*100))
+            if self.loss == 'softmax':
+                print(
+                    "[{}:{}] finished. cross entropy loss: {:.8f} - "
+                    "top1 acc: {:.4f} % - top3 acc: {:.4f} %".format(
+                        mode, self.current_epoch, cross_entropy_loss.item(),
+                        top1_acc * 100, top3_acc * 100))
+            elif self.loss == 'center-loss':
+                print(
+                    "[{}:{}] finished. cross entropy loss: {:.8f} - "
+                    "center loss: {:.8f} - together: {:.8f} - "
+                    "top1 acc: {:.4f} % - top3 acc: {:.4f} %".format(
+                        mode, self.current_epoch, cross_entropy_loss.item(),
+                        center_loss.item(), loss.item(),
+                        top1_acc*100, top3_acc*100))
 
-
+            evaluate(model=self.model, test_set_path=self.test_set_path, pairs_file='datasets/lfw/pairs.txt')
 
     def _get_matches(self, targets, logits, n=1):
         _, preds = logits.topk(n, dim=1)
@@ -167,7 +177,7 @@ class Trainer(object):
         return matches
 
     def persist(self, is_best=False):
-        model_dir = os.path.join(self.log_dir, 'models')
+        model_dir = os.path.join(self.log_dir, self.experiment_name)
         if not os.path.isdir(model_dir):
             os.mkdir(model_dir)
         file_name = (
@@ -183,82 +193,3 @@ class Trainer(object):
         }
         state_path = os.path.join(model_dir, file_name)
         torch.save(state, state_path)
-
-
-    def get_dataset_feat(self, dataloader, epoch, prefix):
-
-        all_features, all_labels = [], []
-        batch = 0
-
-        for images, targets, names in dataloader:
-
-            batch = batch + 1
-
-            targets = torch.tensor(targets).to(device)
-            images = images.to(device)
-            centers = self.model.centers
-
-            logits, features = self.model(images)
-
-            all_features.append(features.detach().cpu().numpy())
-            all_labels.append(targets.detach().cpu().numpy())
-
-        # convert to np.array
-        all_features = np.vstack(all_features)
-        all_features_2d = all_features
-        #all_features_2d = TSNE(n_components=2, init = 'random').fit_transform(all_features)
-        all_labels = np.hstack(all_labels)
-
-        dirname = osp.join('logs', prefix)
-        if not osp.exists(dirname):
-            os.mkdir(dirname)
-        save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.npz')
-        np.savez(save_name, features=all_features, labels=all_labels)
-
-        return all_features, all_labels, all_features_2d
-
-
-    def plot_features(self, features, epoch, prefix):
-
-        """Plot features on 2D plane.
-
-                Args:
-                    features: (num_instances, num_features).
-                    labels: (num_instances).
-                """
-
-        plt.scatter(features[:, 0], features[:, 1])
-
-        dirname = osp.join('logs', prefix)
-        if not osp.exists(dirname):
-            os.mkdir(dirname)
-        save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.png')
-        plt.savefig(save_name, bbox_inches='tight')
-        # plt.show()
-        plt.close()
-
-
-    def plot_features_per_class(self, features, labels, num_classes, epoch, prefix):
-        """Plot features on 2D plane.
-
-        Args:
-            features: (num_instances, num_features).
-            labels: (num_instances).
-        """
-        colors = ['C' + str(i) for i in range(10)]
-        for label_idx in range(10):#num_classes):
-            plt.scatter(
-                features[labels == label_idx, 0],
-                features[labels == label_idx, 1],
-                c=colors[label_idx],
-                s=1,
-            )
-        plt_labels = [str(i) for i in range(10)]
-        plt.legend(plt_labels, loc='upper right')
-        dirname = osp.join('logs', prefix)
-        if not osp.exists(dirname):
-            os.mkdir(dirname)
-        save_name = osp.join(dirname, 'epoch_' + str(epoch + 1) + '.png')
-        plt.savefig(save_name, bbox_inches='tight')
-        #plt.show()
-        plt.close()

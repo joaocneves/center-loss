@@ -1,7 +1,3 @@
 __pycache__/
-logs/*
-logs_*/*
+logs
 *.pth
-datasets/*
-.idea/*
-*.npz
