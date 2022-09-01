@@ -11,6 +11,31 @@ def compute_center_loss(features, centers, targets):
     return center_loss
 
 
+def compute_relative_loss(features, centers, targets, soft_feat):
+
+    batch_size = features.size(0)
+    num_classes = centers.size(0)
+    soft_feat_per_label = soft_feat[targets]
+    relative_dist_mat = torch.pow(soft_feat_per_label, 2).sum(dim=1, keepdim=True).expand(batch_size,
+                                                                                          num_classes) + \
+                        torch.pow(soft_feat, 2).sum(dim=1, keepdim=True).expand(num_classes, batch_size).t()
+    relative_dist_mat.addmm_(1, -2, soft_feat_per_label, soft_feat.t())
+    relative_dist_mat = relative_dist_mat/soft_feat.size(1)
+
+    distmat = torch.pow(features, 2).sum(dim=1, keepdim=True).expand(batch_size, num_classes) + \
+              torch.pow(centers, 2).sum(dim=1, keepdim=True).expand(num_classes, batch_size).t()
+    distmat.addmm_(1, -2, features, centers.t())
+    distmat = distmat / features.size(1)
+
+    #dist = torch.pow(torch.pow(distmat - relative_dist_mat, 2), 1)
+    #print(torch.max(dist))
+    #loss = dist.clamp(min=1e-12, max=1e+12).sum()
+
+    criterion = torch.nn.MSELoss()
+    loss = criterion(distmat, relative_dist_mat)
+
+    return loss
+
 def get_center_delta(features, centers, targets, alpha):
     # implementation equation (4) in the center-loss paper
     features = features.view(features.size(0), -1)

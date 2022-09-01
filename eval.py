@@ -5,7 +5,7 @@ from math import sqrt
 import torch
 from sklearn.metrics import roc_curve, roc_auc_score
 from torch.utils.data import DataLoader
-from torchvision import transforms
+import torch.nn.functional as F
 import numpy as np
 
 from dataset import Dataset, create_datasets, LFWPairedDataset
@@ -74,7 +74,7 @@ def optimal_threshold(fpr, tpr, th):
     return th[optim_th]
 
 
-def eval(embedings_a, embedings_b, matches):
+def lfw_evaluation_protocol(embedings_a, embedings_b, matches, l2_norm=True, dist='cosine'):
     nfolds = 10  # predfined by LFW protocol
 
     stats_train = dict.fromkeys(['tpr', 'fpr', 'auc'])
@@ -91,8 +91,17 @@ def eval(embedings_a, embedings_b, matches):
     folds = [list(range(600 * i, 600 * (i + 1))) for i in range(10)]
     folds = np.array(folds)
 
-    scores = -torch.sum(torch.pow(embedings_a - embedings_b, 2), dim=1).cpu()
+    if l2_norm:
+        embedings_a = F.normalize(embedings_a, p=2, dim=1)
+        embedings_b = F.normalize(embedings_b, p=2, dim=1)
+
+    if dist == 'euclidean':
+        scores = -torch.sum(torch.pow(embedings_a - embedings_b, 2), dim=1).cpu()
+    else:
+        scores = F.cosine_similarity(embedings_a, embedings_b).cpu()
+
     thresholds = np.unique(scores.cpu())
+    thresholds = np.append(thresholds, thresholds[-1]+0.01)
     #thresholds = np.arange(0, 4, 0.05)
     #distances = torch.sum(torch.pow(embedings_a - embedings_b, 2), dim=1)
     #tpr, fpr, accuracy, best_thresholds = compute_roc(distances, matches, thresholds, fold_size=10)
@@ -105,14 +114,13 @@ def eval(embedings_a, embedings_b, matches):
         test_idx = folds[test_fold]
         train_idx = folds[train_fold].ravel()
 
-
-        scores_train = -torch.sum(torch.pow(embedings_a[train_idx] - embedings_b[train_idx], 2), dim=1).cpu()
+        scores_train = scores[train_idx].cpu()
         matches_train = matches[train_idx].cpu()
         fpr_train[i], tpr_train[i] = myroccurve(matches_train, scores_train, thresholds)
         auc_train[i] = roc_auc_score(matches_train, scores_train)
         optim_th = optimal_threshold(fpr_train[i], tpr_train[i], thresholds)
 
-        scores_test = -torch.sum(torch.pow(embedings_a[test_idx] - embedings_b[test_idx], 2), dim=1).cpu()
+        scores_test = scores[test_idx].cpu()
         matches_test = matches[test_idx].cpu()
         fpr_test[i], tpr_test[i] = myroccurve(matches_test, scores_test, thresholds)
         auc_test[i] = roc_auc_score(matches_test, scores_test)
@@ -135,12 +143,10 @@ def eval(embedings_a, embedings_b, matches):
     stats_test['auc'] = np.mean(auc_test)
     avg_accuracy = np.mean(accuracy)
 
-
-
     return avg_accuracy, stats_test, stats_train
 
 
-def evaluate(model, test_set_path, pairs_file, batch_size=1):
+def evaluate_model(model, test_set_path, pairs_file, batch_size=100):
     dataset_dir = test_set_path
 
     eval_flip_images = False
@@ -192,12 +198,25 @@ def evaluate(model, test_set_path, pairs_file, batch_size=1):
 
         matches[start:end] = batched_matches.data
 
-    accuracy, stats_test, stats_train = eval(embedings_a, embedings_b, matches)
+    _acc = dict({'nol2_euc': None, 'nol2_cos': None, 'l2_euc': None, 'l2_cos': None})
+    _statstest = dict({'nol2_euc': None, 'nol2_cos': None, 'l2_euc': None, 'l2_cos': None})
+    _statstrain = dict({'nol2_euc': None, 'nol2_cos': None, 'l2_euc': None, 'l2_cos': None})
+    _acc['nol2_euc'], _statstest['nol2_euc'], _statstrain['nol2_euc'] = \
+        lfw_evaluation_protocol(embedings_a, embedings_b, matches, l2_norm=False, dist='euclidean')
+    _acc['l2_euc'], _statstest['l2_euc'], _statstrain['l2_euc'] = \
+        lfw_evaluation_protocol(embedings_a, embedings_b, matches, l2_norm=True, dist='euclidean')
+    _acc['nol2_cos'], _statstest['nol2_cos'], _statstrain['nol2_cos'] = \
+        lfw_evaluation_protocol(embedings_a, embedings_b, matches, l2_norm=False, dist='cosine')
+    _acc['l2_cos'], _statstest['l2_cos'], _statstrain['l2_cos'] = \
+        lfw_evaluation_protocol(embedings_a, embedings_b, matches, l2_norm=True, dist='cosine')
 
-    print('Model accuracy is {}'.format(accuracy))
+
+    print('Model accuracy is {}'.format(_acc))
+
+    return _acc, _statstest, _statstrain
 
 
-def evaluate_model(args):
+def evaluate(args):
     checkpoint = torch.load(args.weights)
     num_classes = checkpoint['state_dict']['classifier.weight'].shape[0]
     model_class = get_model_class(args)
@@ -206,7 +225,9 @@ def evaluate_model(args):
     model.load_state_dict(checkpoint['state_dict'], strict=False)
     model.eval()
 
-    evaluate(model, args.test_dataset_dir, args.pairs_file, batch_size=args.batch_size)
+    accuracy, stats_test, stats_train = evaluate_model(model, args.test_dataset_dir, args.pairs_file, batch_size=args.batch_size)
+
+    return accuracy, stats_test, stats_train
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='center loss example')
@@ -228,4 +249,4 @@ if __name__ == '__main__':
                              '(default: $DATASET_DIR/pairs.txt)')
 
     args = parser.parse_args()
-    evaluate_model(args)
+    evaluate(args)

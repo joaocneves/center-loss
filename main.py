@@ -1,6 +1,7 @@
 import json
 import os
 import argparse
+import random
 
 import torch
 from torch.utils.data import DataLoader
@@ -16,6 +17,15 @@ from utils import download, generate_roc_curve, image_loader
 from metrics import compute_roc, select_threshold
 from imageaug import transform_for_infer, transform_for_training
 
+# Seed
+seed = 12345
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+np.random.seed(seed)
+random.seed(seed)
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
 
 def main(args):
     train(args)
@@ -92,6 +102,10 @@ def train(args):
         shuffle=False
     )
 
+    soft_feat = np.load(args.atributes_file)
+    soft_feat = torch.tensor(soft_feat.astype('float32'))
+    soft_feat = soft_feat.to(device)
+
     model = model_class(num_classes).to(device)
 
     trainables_wo_bn = [param for name, param in model.named_parameters() if
@@ -102,7 +116,7 @@ def train(args):
     optimizer = torch.optim.Adam([
         {'params': trainables_wo_bn},
         {'params': trainables_only_bn}
-    ], lr=args.lr)
+    ], lr=args.lr, weight_decay=0.0005)
 
     trainer = Trainer(
         optimizer,
@@ -110,11 +124,13 @@ def train(args):
         args.loss,
         training_dataloader,
         validation_dataloader,
+        soft_feat=soft_feat,
         test_set_path=args.test_dataset_dir,
         max_epoch=args.epochs,
         resume=args.resume,
         log_dir=log_dir,
-        experiment_name=experiment_name
+        experiment_name=experiment_name,
+        att_loss_weight=args.att_loss_weight
     )
     trainer.train()
 
@@ -145,12 +161,17 @@ if __name__ == '__main__':
     parser.add_argument('--test_dataset_dir', type=str,
                         help='directory with lfw dataset'
                              ' (default: $HOME/datasets/lfw)')
+    parser.add_argument('--atributes_file', type=str,
+                        default='datasets/lfw/atts_lfw.npy')
     parser.add_argument('--weights', type=str,
                         help='pretrained weights to load '
                              'default: ($LOG_DIR/resnet18.pth)')
     parser.add_argument('--pairs', type=str,
                         help='path of pairs.txt '
                              '(default: $DATASET_DIR/pairs.txt)')
+    parser.add_argument('--att_loss_weight', type=float, default=0.5,
+                        help='verify 2 images of face belong to one person,'
+                             'split image pathes by comma')
 
     args = parser.parse_args()
     main(args)

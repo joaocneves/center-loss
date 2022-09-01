@@ -3,17 +3,18 @@ import os
 import torch
 
 from device import device
-from loss import compute_center_loss, get_center_delta
+from loss import compute_center_loss, get_center_delta, compute_relative_loss
 
-from eval import evaluate
+from eval import evaluate_model
 
 
 class Trainer(object):
 
     def __init__(
             self, optimizer, model, loss, training_dataloader,
-            validation_dataloader, test_set_path, log_dir=False, experiment_name='', max_epoch=100, resume=False,
-            persist_stride=2, lamda=3, alpha=0.5):
+            validation_dataloader, soft_feat, test_set_path, log_dir=False, experiment_name='', max_epoch=100,
+            resume=False,
+            persist_stride=2, lamda=0.03, alpha=0.5, att_loss_weight=0.1):
 
         self.log_dir = log_dir
         self.experiment_name = experiment_name
@@ -25,16 +26,24 @@ class Trainer(object):
         self.persist_stride = persist_stride
         self.training_dataloader = training_dataloader
         self.validation_dataloader = validation_dataloader
+        self.soft_feat = soft_feat
         self.training_losses = {
-                'center': [], 'cross_entropy': [],
-                'together': [], 'top3acc': [], 'top1acc': []}
+            'center': [], 'cross_entropy': [], 'attribute-loss': [],
+            'together': [], 'top3acc': [], 'top1acc': []}
         self.validation_losses = {
-                'center': [], 'cross_entropy': [],
-                'together': [], 'top3acc': [], 'top1acc': []}
+            'center': [], 'cross_entropy': [], 'attribute-loss': [],
+            'together': [], 'top3acc': [], 'top1acc': []}
+        self.test_stats = {
+            'acc': dict({'nol2_euc': [], 'nol2_cos': [], 'l2_euc': [], 'l2_cos': []}),
+            'auc': dict({'nol2_euc': [], 'nol2_cos': [], 'l2_euc': [], 'l2_cos': []}),
+            'fpr': dict({'nol2_euc': [], 'nol2_cos': [], 'l2_euc': [], 'l2_cos': []}),
+            'tpr': dict({'nol2_euc': [], 'nol2_cos': [], 'l2_euc': [], 'l2_cos': []})}
         self.start_epoch = 1
         self.current_epoch = 1
         self.lamda = lamda
+        self.att_loss_weight = att_loss_weight
         self.alpha = alpha
+
         self.test_set_path = test_set_path
 
         if not self.log_dir:
@@ -50,20 +59,24 @@ class Trainer(object):
                     "resume file {} is not found".format(state_file))
             print("loading checkpoint {}".format(state_file))
             checkpoint = torch.load(state_file)
-            self.start_epoch = self.current_epoch = checkpoint['epoch']
+            self.start_epoch = self.current_epoch = checkpoint['epoch'] + 1
 
             pretrained_dict = checkpoint['state_dict']
-            #pretrained_dict = {k: v for k, v in pretrained_dict.items() if k.startswith('base')}
+            # pretrained_dict = {k: v for k, v in pretrained_dict.items() if k.startswith('base')}
 
             self.model.load_state_dict(checkpoint['state_dict'], strict=True)
-            #self.optimizer.load_state_dict(checkpoint['optimizer'])
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.training_losses = checkpoint['training_losses']
             self.validation_losses = checkpoint['validation_losses']
+            self.test_stats = checkpoint['test_stats']
+            for key in self.test_stats:
+                for subkey in self.test_stats[key]:
+                    self.test_stats[key][subkey] = self.test_stats[key][subkey][:self.current_epoch-1]
             print("loaded checkpoint {} (epoch {})".format(
                 state_file, self.current_epoch))
 
     def train(self):
-        for self.current_epoch in range(self.start_epoch, self.max_epoch+1):
+        for self.current_epoch in range(self.start_epoch, self.max_epoch + 1):
             self.run_epoch(mode='train')
             self.run_epoch(mode='validate')
             if not (self.current_epoch % self.persist_stride):
@@ -81,11 +94,11 @@ class Trainer(object):
 
         total_cross_entropy_loss = 0
         total_center_loss = 0
+        total_att_loss = 0
         total_loss = 0
         total_top1_matches = 0
         total_top3_matches = 0
         batch = 0
-
 
         with torch.set_grad_enabled(mode == 'train'):
             for images, targets, names in dataloader:
@@ -104,19 +117,37 @@ class Trainer(object):
                     center_loss = compute_center_loss(features, centers, targets)
                     loss = self.lamda * center_loss + cross_entropy_loss
                 elif self.loss == 'attribute-loss':
-                    loss = self.lamda * center_loss + cross_entropy_loss
-                
-                if (batch + 1) % 500 == 0:
-                    print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
-                          "{:.8f} - total weighted loss: {:.8f}".format(
-                              mode, self.current_epoch,
-                              cross_entropy_loss.item(),
-                              center_loss.item(), loss.item()))
+                    center_loss = compute_center_loss(features, centers, targets)
+                    relative_loss = compute_relative_loss(features, centers, targets, self.soft_feat)
+                    loss = self.lamda * center_loss + cross_entropy_loss + relative_loss * self.att_loss_weight
 
+                if (batch + 1) % 200 == 0:
+                    if self.loss == 'softmax':
+                        print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
+                              "{:.8f} - total weighted loss: {:.8f}".format(
+                            mode, self.current_epoch,
+                            cross_entropy_loss.item(),
+                            center_loss.item(), loss.item()))
+                    elif self.loss == 'center-loss':
+                        print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
+                              "{:.8f} - total weighted loss: {:.8f}".format(
+                            mode, self.current_epoch,
+                            cross_entropy_loss.item(),
+                            center_loss.item(), loss.item()))
+                    elif self.loss == 'attribute-loss':
+                        print("[{}:{}] cross entropy loss: {:.8f} - relative loss {:.8f} "
+                              "- center loss: {:.8f} - total weighted loss: {:.8f}".format(
+                            mode, self.current_epoch,
+                            cross_entropy_loss.item(),
+                            relative_loss.item(),
+                            center_loss.item(), loss.item()))
 
                 total_cross_entropy_loss += cross_entropy_loss
                 if self.loss == 'center-loss':
                     total_center_loss += center_loss
+                elif self.loss == 'attribute-loss':
+                    total_center_loss += center_loss
+                    total_att_loss += relative_loss
                 total_loss += loss
 
                 if mode == 'train':
@@ -135,20 +166,27 @@ class Trainer(object):
                 total_top1_matches += self._get_matches(targets, logits, 1)
                 total_top3_matches += self._get_matches(targets, logits, 3)
 
-
             cross_entropy_loss = total_cross_entropy_loss / batch
             if self.loss == 'softmax':
                 loss = cross_entropy_loss
             elif self.loss == 'center-loss':
                 center_loss = total_center_loss / batch
                 loss = center_loss + cross_entropy_loss
+            elif self.loss == 'attribute-loss':
+                center_loss = total_center_loss / batch
+                relative_loss = total_att_loss / batch
+                loss = center_loss + cross_entropy_loss
+
             top1_acc = total_top1_matches / len(dataloader.dataset)
             top3_acc = total_top3_matches / len(dataloader.dataset)
 
             if self.loss == 'center-loss':
-                loss_recorder['center'].append(total_center_loss/batch)
+                loss_recorder['center'].append(total_center_loss / batch)
+            elif self.loss == 'attribute-loss':
+                loss_recorder['center'].append(total_center_loss / batch)
+                loss_recorder['attribute-loss'].append(total_att_loss / batch)
             loss_recorder['cross_entropy'].append(cross_entropy_loss)
-            loss_recorder['together'].append(total_loss/batch)
+            loss_recorder['together'].append(total_loss / batch)
             loss_recorder['top1acc'].append(top1_acc)
             loss_recorder['top3acc'].append(top3_acc)
 
@@ -165,9 +203,30 @@ class Trainer(object):
                     "top1 acc: {:.4f} % - top3 acc: {:.4f} %".format(
                         mode, self.current_epoch, cross_entropy_loss.item(),
                         center_loss.item(), loss.item(),
-                        top1_acc*100, top3_acc*100))
+                        top1_acc * 100, top3_acc * 100))
+            elif self.loss == 'attribute-loss':
+                print(
+                    "[{}:{}] finished. cross entropy loss: {:.8f} - "
+                    "att loss: {:.8f} - "
+                    "center loss: {:.8f} - together: {:.8f} - "
+                    "top1 acc: {:.4f} % - top3 acc: {:.4f} %".format(
+                        mode, self.current_epoch, cross_entropy_loss.item(),
+                        relative_loss.item(),
+                        center_loss.item(), loss.item(),
+                        top1_acc * 100, top3_acc * 100))
 
-            evaluate(model=self.model, test_set_path=self.test_set_path, pairs_file='datasets/lfw/pairs.txt')
+            if mode == 'validate':
+                # Evaluate on external dataset (e.g. LFW)
+                accuracy, stats_test, stats_train = evaluate_model(model=self.model, test_set_path=self.test_set_path,
+                                                                   pairs_file='datasets/lfw/pairs.txt')
+
+                for key in accuracy:
+                    self.test_stats['acc'][key].append(accuracy[key])
+                    self.test_stats['auc'][key].append(stats_test[key]['auc'])
+                    self.test_stats['tpr'][key].append(stats_test[key]['tpr'])
+                    self.test_stats['fpr'][key].append(stats_test[key]['fpr'])
+
+                self.store_stats()
 
     def _get_matches(self, targets, logits, n=1):
         _, preds = logits.topk(n, dim=1)
@@ -189,7 +248,25 @@ class Trainer(object):
             'state_dict': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'training_losses': self.training_losses,
-            'validation_losses': self.validation_losses
+            'validation_losses': self.validation_losses,
+            'test_stats': self.test_stats
         }
+        state_path = os.path.join(model_dir, file_name)
+        torch.save(state, state_path)
+
+    def store_stats(self):
+
+        model_dir = os.path.join(self.log_dir, self.experiment_name)
+        if not os.path.isdir(model_dir):
+            os.mkdir(model_dir)
+
+        file_name = 'stats.pt'
+
+        state = {
+            'train_stats': self.training_losses,
+            'val_stats': self.validation_losses,
+            'test_stats': self.test_stats
+        }
+
         state_path = os.path.join(model_dir, file_name)
         torch.save(state, state_path)
