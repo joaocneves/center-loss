@@ -116,7 +116,7 @@ def train(args):
     optimizer = torch.optim.Adam([
         {'params': trainables_wo_bn},
         {'params': trainables_only_bn}
-    ], lr=args.lr, weight_decay=0.0005)
+    ], lr=args.lr)#, weight_decay=0.0005)
 
     trainer = Trainer(
         optimizer,
