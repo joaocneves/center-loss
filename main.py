@@ -4,16 +4,18 @@ import argparse
 import random
 
 import torch
+import yaml
 from torch.utils.data import DataLoader
 from torchvision import transforms
 import numpy as np
 
-from dataset import Dataset, create_datasets, LFWPairedDataset
+
+from dataset import Dataset, create_datasets_with_attributes, LFWPairedDataset, DatasetAttributes
 from loss import compute_center_loss, get_center_delta
 from models import Resnet50FaceModel, Resnet18FaceModel
 from device import device
 from trainer import Trainer
-from utils import download, generate_roc_curve, image_loader
+from utils_fun import download, generate_roc_curve, image_loader
 from metrics import compute_roc, select_threshold
 from imageaug import transform_for_infer, transform_for_training
 
@@ -30,6 +32,11 @@ torch.backends.cudnn.deterministic = True
 def main(args):
     train(args)
 
+
+def load_yaml(path):
+    with open(path, 'r') as f:
+        loaded = yaml.load(f, Loader=yaml.Loader)
+    return loaded
 
 def get_dataset_dir(args):
     home = os.path.expanduser("~")
@@ -76,16 +83,19 @@ def get_model_class(args):
 
 
 def train(args):
-    dataset_dir = get_dataset_dir(args)
+    cfg = load_yaml('config.yml')
+
+    dataset_name = cfg['train_cfg']['train_set_name']
+    dataset_dir = cfg['train_cfg']['train_set_path']
     log_dir = get_log_dir(args)
     model_class = get_model_class(args)
     experiment_name = get_experiment_name(args, log_dir)
 
-    training_set, validation_set, num_classes = create_datasets(dataset_dir)
+    training_set, validation_set, num_classes = create_datasets_with_attributes(dataset_name, dataset_dir, cfg['train_cfg']['attributes-file'])
 
-    training_dataset = Dataset(
+    training_dataset = DatasetAttributes(
             training_set, transform_for_training(model_class.IMAGE_SHAPE))
-    validation_dataset = Dataset(
+    validation_dataset = DatasetAttributes(
         validation_set, transform_for_infer(model_class.IMAGE_SHAPE))
 
     training_dataloader = torch.utils.data.DataLoader(
@@ -102,11 +112,14 @@ def train(args):
         shuffle=False
     )
 
-    soft_feat = np.load(args.atributes_file)
+    soft_feat = np.load('datasets/celeba/atts_celeba.npy')
+    #soft_feat = soft_feat[:,[20, 25, 26]]
+    #soft_feat = np.round(soft_feat)
     soft_feat = torch.tensor(soft_feat.astype('float32'))
     soft_feat = soft_feat.to(device)
 
-    model = model_class(num_classes).to(device)
+
+    model = model_class(num_classes, feat_normalization=args.feat_normalization).to(device)
 
     trainables_wo_bn = [param for name, param in model.named_parameters() if
                         param.requires_grad and 'bn' not in name]
@@ -125,12 +138,12 @@ def train(args):
         training_dataloader,
         validation_dataloader,
         soft_feat=soft_feat,
-        test_set_path=args.test_dataset_dir,
         max_epoch=args.epochs,
         resume=args.resume,
         log_dir=log_dir,
         experiment_name=experiment_name,
-        att_loss_weight=args.att_loss_weight
+        att_loss_weight=args.att_loss_weight,
+        cfg_inference=cfg
     )
     trainer.train()
 
@@ -155,20 +168,11 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str,
                         help='model path to the resume training',
                         default=False)
-    parser.add_argument('--train_dataset_dir', type=str,
-                        help='directory with lfw dataset'
-                             ' (default: $HOME/datasets/casiawebface)')
-    parser.add_argument('--test_dataset_dir', type=str,
-                        help='directory with lfw dataset'
-                             ' (default: $HOME/datasets/lfw)')
-    parser.add_argument('--atributes_file', type=str,
-                        default='datasets/lfw/atts_lfw.npy')
     parser.add_argument('--weights', type=str,
                         help='pretrained weights to load '
                              'default: ($LOG_DIR/resnet18.pth)')
-    parser.add_argument('--pairs', type=str,
-                        help='path of pairs.txt '
-                             '(default: $DATASET_DIR/pairs.txt)')
+    parser.add_argument('--feat_normalization', type=str, default='none',
+                        help="Normalization strategy for features (option: none, batchnorm, l2)")
     parser.add_argument('--att_loss_weight', type=float, default=0.5,
                         help='verify 2 images of face belong to one person,'
                              'split image pathes by comma')

@@ -10,9 +10,10 @@ class ResnetFaceModel(FaceModel):
 
     IMAGE_SHAPE = (112, 112)
 
-    def __init__(self, num_classes, feature_dim):
+    def __init__(self, num_classes, feat_normalization, feature_dim):
         super().__init__(num_classes, feature_dim)
 
+        self.feat_normalization = feat_normalization
         self.avgpool = nn.AvgPool2d((4, 4))
         self.bn2 = nn.BatchNorm2d(2048)
         self.dropout = nn.Dropout()
@@ -34,25 +35,24 @@ class ResnetFaceModel(FaceModel):
         x = self.backbone.layer3(x)
         x = self.backbone.layer4(x)
 
-        """
-        x = self.bn2(x)
-        x = self.dropout(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        feature = self.extract_feature(x)
-        feature = self.bn3(feature)
-        """
+        x = self.bn2(x) # optional
+        x = self.dropout(x) # optional
 
         batch_size = x.size(0)
         x = self.avgpool(x)
         x = x.view(batch_size, -1)
         feature = self.extract_feature(x)
+        if self.feat_normalization == 'batchnorm':
+            feature = self.bn3(feature)
         logits = self.classifier(feature) if self.num_classes else None
 
-        feature_normed = feature.div(
-            torch.norm(feature, p=2, dim=1, keepdim=True).expand_as(feature))
+        if self.feat_normalization == 'l2':
+            feature_normed = feature.div(
+                torch.norm(feature, p=2, dim=1, keepdim=True).expand_as(feature))
 
-        return logits, feature
+            return logits, feature_normed
+        else:
+            return logits, feature
 
 
 class Resnet18FaceModel(ResnetFaceModel):
@@ -66,10 +66,11 @@ class Resnet18FaceModel(ResnetFaceModel):
 
 class Resnet50FaceModel(ResnetFaceModel):
 
-    FEATURE_DIM = 2048
+    FEATURE_DIM = 512
 
-    def __init__(self, num_classes):
-        super().__init__(num_classes, self.FEATURE_DIM)
+
+    def __init__(self, num_classes, feat_normalization):
+        super().__init__(num_classes, feat_normalization, self.FEATURE_DIM)
         self.backbone = resnet50(pretrained=True)
         #self.backbone = nn.Sequential(*list(self.backbone.children())[:-1]) # this keeps adaptive pooling layer
         #self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])  # this removes adaptive pooling layer

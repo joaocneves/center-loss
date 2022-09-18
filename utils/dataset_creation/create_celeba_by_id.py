@@ -112,13 +112,13 @@ for person_name in celeba_dict:
 
     images = celeba_dict[person_name]
     person_name = str(person_name)
-    os.makedirs(os.path.join('../datasets/celeba/', person_name + '/'), exist_ok=True)
+    os.makedirs(os.path.join('../../datasets/celeba/', person_name + '/'), exist_ok=True)
 
     for image in images:
 
         #image = image.replace('.jpg','.png')
         src_path = os.path.join(celeba_path, image)
-        dst_path = os.path.join('../datasets/celeba/', person_name, image)
+        dst_path = os.path.join('../../datasets/celeba/', person_name, image)
         if os.path.exists(src_path):
             shutil.copyfile(src_path, dst_path)
 

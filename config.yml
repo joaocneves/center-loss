@@ -1,0 +1,22 @@
+#Model Config
+backbone: ResNet50
+batch-size: 32
+epoch: 20
+learning-rate: 0.001
+scale-l2-regularizer: 0.01
+dropout-rate: 0.5
+checkpoint_path: "checkpoints/ResNet50/1/weights_7.h5"
+
+#Database Config
+train_cfg:
+  train_set_name: 'celeba'
+  train_set_path: 'datasets/celeba/celeba-aligned_insight'
+  attributes-file: 'datasets/celeba/attributes_per_person_celeba.json'
+
+lfw_config:
+  test_set_name: 'lfw'
+  test_set_path: '/home/socialab/Joao/datasets/lfw-aligned_insight'
+  pairs_file: 'datasets/lfw/pairs.txt'
+  attributes-file: 'datasets/lfw/attributes_per_person_lfw.json'
+
+

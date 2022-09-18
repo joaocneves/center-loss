@@ -15,7 +15,7 @@ print(command)
 os.system(command)
 
 
-for att_loss_weight in np.arange(0.1, 1.0, 0.1):
+for att_loss_weight in np.arange(0.1, 2.0, 0.2):
 
     command = 'python3 main.py --experiment_name imgsize_112_attweight_' + str(att_loss_weight) + ' '\
               '--loss attribute-loss ' \

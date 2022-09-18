@@ -1,3 +1,5 @@
+import itertools
+import json
 import os
 import random
 import tarfile
@@ -6,13 +8,48 @@ from math import ceil, floor
 from torch.utils import data
 import numpy as np
 
-from utils import image_loader, download
+from utils_fun import image_loader, download
 
 DATASET_TARBALL = "http://vis-www.cs.umass.edu/lfw/lfw-deepfunneled.tgz"
 PAIRS_TRAIN = "http://vis-www.cs.umass.edu/lfw/pairsDevTrain.txt"
 PAIRS_VAL = "http://vis-www.cs.umass.edu/lfw/pairsDevTest.txt"
 
-def create_datasets(dataroot, train_val_split=0.9):
+def create_gallery_probe_datasets(dataroot):
+
+    # dataset_name = 'celeba'# dataroot.split('/')[-1]
+    images_root = dataroot  # os.path.join(dataroot, dataset_name + '-aligned')
+    names = os.listdir(images_root)
+
+    names.sort()
+
+    if len(names) == 0:
+        raise RuntimeError('Empty dataset')
+
+    gallery_set = []
+    probes_set = []
+    for klass, name in enumerate(names):
+
+        def add_class(image):
+            image_path = os.path.join(images_root, name, image)
+            return (image_path, klass, name)
+
+        images_of_person = os.listdir(os.path.join(images_root, name))
+        images_of_person.sort()
+        #for img in images_of_person:
+        #    image_id_dict[img] = name
+        total = len(images_of_person)
+
+        gallery_set += map(
+            add_class,
+            [images_of_person[0]])
+        if total > 1:
+            probes_set += map(
+                add_class,
+                images_of_person[1:])
+
+    return gallery_set, probes_set
+
+def create_datasets_with_attributes(dataset_name, dataroot, attributes_file, train_val_split=0.9):
     """
     if not os.path.isdir(dataroot):
         os.mkdir(dataroot)
@@ -31,10 +68,38 @@ def create_datasets(dataroot, train_val_split=0.9):
     names = os.listdir(images_root)
     """
     
-    dataset_name = dataroot.split('/')[-1]
+    #dataset_name = 'celeba'# dataroot.split('/')[-1]
     images_root = dataroot # os.path.join(dataroot, dataset_name + '-aligned')
     names = os.listdir(images_root)
-    
+
+    names.sort()
+    # names_txt = open(os.path.join("datasets", dataset_name, "persons_" + dataset_name + ".txt"), "r").read().split(
+    #     '\n')
+    #
+    if dataset_name == 'celeba':
+        names = [int(i) for i in names]
+        names.sort()
+        names = [str(i) for i in names]
+        names_txt = open(os.path.join("datasets", dataset_name, "persons_" + dataset_name + ".txt"),
+                         "r").read().split('\n')
+
+        assert names == names_txt
+
+    # -------  Load Attributes per Person
+    with open(attributes_file, 'r', encoding='utf-8') as file:
+        attributes_per_person = json.load(file)
+
+    for k, v in attributes_per_person.items():
+        for _k, _v in attributes_per_person[k].items():
+            attributes_per_person[k][_k] = np.array(_v)
+
+    # -------  Load Attributes per Image
+    with open(attributes_file.replace('person', 'image'), 'r', encoding='utf-8') as file:
+        attributes_per_image = json.load(file)
+
+    for k, v in attributes_per_image.items():
+        attributes_per_image[k] = np.array(v)
+
     if len(names) == 0:
         raise RuntimeError('Empty dataset')
 
@@ -43,7 +108,9 @@ def create_datasets(dataroot, train_val_split=0.9):
     for klass, name in enumerate(names):
         def add_class(image):
             image_path = os.path.join(images_root, name, image)
-            return (image_path, klass, name)
+            image_attributes = attributes_per_image[os.path.join(name,image)]
+            person_attributes = attributes_per_person[name]
+            return (image_path, klass, name, image_attributes, person_attributes)
 
         images_of_person = os.listdir(os.path.join(images_root, name))
         total = len(images_of_person)
@@ -75,6 +142,22 @@ class Dataset(data.Dataset):
             image = self.transform(image)
         return (image, self.datasets[index][1], self.datasets[index][2])
 
+class DatasetAttributes(data.Dataset):
+
+    def __init__(self, datasets, transform=None, target_transform=None):
+        self.datasets = datasets
+        self.num_classes = len(datasets)
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __len__(self):
+        return len(self.datasets)
+
+    def __getitem__(self, index):
+        image = image_loader(self.datasets[index][0])
+        if self.transform:
+            image = self.transform(image)
+        return (image, self.datasets[index][1], self.datasets[index][2], self.datasets[index][3], self.datasets[index][4])
 
 class PairedDataset(data.Dataset):
 

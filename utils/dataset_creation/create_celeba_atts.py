@@ -1,8 +1,10 @@
+import json
 import os
 import re
 import numpy as np
-import statistics
 import time
+
+from scipy.stats import stats
 
 celeb_attributes_names = ["5_o_Clock_Shadow",
                           "Arched_Eyebrows",
@@ -235,32 +237,74 @@ def get_attr_per_samples(attr_path, samples):
     return attr_list
 
 
-if __name__ == '__main__':
-    identity_info, image_info = load_celeba_identities('/home/socialab/Desktop/Joao/datasets/CELEBA/identity_CelebA.txt')
-    attibutes_map_list, atttributes_per_image = load_celeba_attrs('/home/socialab/Desktop/Joao/datasets/CELEBA/list_attr_celeba.txt')
-    n_identities = len(identity_info.keys())
+def create_attribute_files_standard_format(identity_info, atttributes_per_image):
+
+    """
+    Creates the files containing the attributes of each image and each person of the dataset
+
+    Inputs:
+        identity_info - dictionary of the list image names per id
+            identity_info[person_id] -> (image_name_1, ..., image_name_n)
+            image_info[image_id] -> person_id
+
+        atttributes_per_image
+            atributes_per_image[image_id] -> 1x40 ndarray with the attributes
+
+
+    Outputs (complying with the standard format):
+        atributes_per_person: dict()
+           [person_id] -> dict
+                ['mean'] -> 1x40 ndarray with the average value each attribute along the person_id images
+                ['majority'] -> 1x40 ndarray with the most frequent value of each attribute along the person_id images
+                ['median'] -> 1x40 ndarray with the median value each attribute along the person_id images
+
+
+        atributes_per_image dict()
+           [image_id] -> 1x40 ndarray with the value each attribute for the image
+    """
 
     tic = time.time()
-    person_name_list = []
-    person_att_list = []
+    attributes_per_person = dict()
     persons = list(identity_info.keys())
     persons.sort()
     for key in persons:
         attrs = []
         for img in identity_info[key]:
             attrs.append(atttributes_per_image[img])
+            # the attributes_per_image does not have the person_id which may cause problems in some datasets
+            atttributes_per_image[os.path.join(str(key), img)] = atttributes_per_image.pop(img)
 
         attrs = np.asarray(attrs)
-        att_vec = np.mean(attrs, axis=0)
+        #att_vec = np.mean(attrs, axis=0)
 
-        person_name_list.append(str(key))
-        person_att_list.append(att_vec)
+        attributes_per_person[key] = dict.fromkeys(['mean', 'majority', 'median'],[])
+        attributes_per_person[key]['mean'] = np.around(np.mean(attrs, axis=0), decimals=2)
+        attributes_per_person[key]['majority'] = stats.mode(attrs, axis=0).mode[0]
+        attributes_per_person[key]['median'] = np.median(attrs, axis=0)
 
-    with open("../datasets/celeba/persons_celeba.txt", mode="w") as file:
-        file.write("\n".join(person_name_list))
-
-    np.save('../datasets/celeba/atts_celeba.npy', np.array(person_att_list))
-
+        #person_name_list.append(str(key))
+        #person_att_list.append(att_vec)
     toc = time.time()
-    print("[INFO]: Time elapsed - {:.2f}".format((toc-tic)/60))
+    print("[INFO]: Time elapsed - {:.2f}".format((toc - tic) / 60))
+
+    return attributes_per_person, atttributes_per_image
+
+
+
+if __name__ == '__main__':
+
+    identity_info, image_info = load_celeba_identities('/home/socialab/Joao/datasets/CELEBA/identity_CelebA.txt')
+    attibutes_map_list, atttributes_per_image = load_celeba_attrs('/home/socialab/Joao/datasets/CELEBA/list_attr_celeba.txt')
+    n_identities = len(identity_info.keys())
+
+    attributes_per_person, atttributes_per_image = create_attribute_files_standard_format(identity_info, atttributes_per_image)
+
+    with open("../../datasets/celeba/attributes_per_person_celeba.json", "w") as file:
+        json.dump(attributes_per_person, file, cls=NumpyEncoder)
+
+    with open("../../datasets/celeba/attributes_per_image_celeba.json", "w") as file:
+        json.dump(atttributes_per_image, file, cls=NumpyEncoder)
+
+
+
 

@@ -1,20 +1,22 @@
+import json
 import os
 
 import torch
+from matplotlib import pyplot as plt
 
 from device import device
-from loss import compute_center_loss, get_center_delta, compute_relative_loss
+from loss import compute_center_loss, get_center_delta, compute_relative_loss, KL_loss
 
-from eval import evaluate_model
+from eval import evaluate_model, evaluate_metrics
+from utils._helper import NumpyEncoder
 
 
 class Trainer(object):
 
     def __init__(
             self, optimizer, model, loss, training_dataloader,
-            validation_dataloader, soft_feat, test_set_path, log_dir=False, experiment_name='', max_epoch=100,
-            resume=False,
-            persist_stride=2, lamda=0.03, alpha=0.5, att_loss_weight=0.1):
+            validation_dataloader, soft_feat, log_dir=False, experiment_name='', max_epoch=100,
+            resume=False, persist_stride=2, lamda=0.03, alpha=0.5, att_loss_weight=0.1, cfg_inference=None):
 
         self.log_dir = log_dir
         self.experiment_name = experiment_name
@@ -44,7 +46,7 @@ class Trainer(object):
         self.att_loss_weight = att_loss_weight
         self.alpha = alpha
 
-        self.test_set_path = test_set_path
+        self.cfg_inference = cfg_inference
 
         if not self.log_dir:
             self.log_dir = os.path.join(os.path.dirname(
@@ -101,10 +103,12 @@ class Trainer(object):
         batch = 0
 
         with torch.set_grad_enabled(mode == 'train'):
-            for images, targets, names in dataloader:
+            for images, targets, names, image_attributes, person_attributes in dataloader:
                 batch += 1
                 targets = torch.tensor(targets).to(device)
                 images = images.to(device)
+                image_attributes = image_attributes.to(device)
+                person_attributes = person_attributes['mean'].to(device)
                 centers = self.model.centers
 
                 logits, features = self.model(images)
@@ -115,19 +119,20 @@ class Trainer(object):
                     loss = cross_entropy_loss
                 elif self.loss == 'center-loss':
                     center_loss = compute_center_loss(features, centers, targets)
-                    loss = self.lamda * center_loss + cross_entropy_loss
+                    loss = 0.1 * cross_entropy_loss + center_loss
                 elif self.loss == 'attribute-loss':
                     center_loss = compute_center_loss(features, centers, targets)
-                    relative_loss = compute_relative_loss(features, centers, targets, self.soft_feat)
+                    relative_loss = compute_relative_loss(features, centers, targets, self.soft_feat, person_attributes)
+                    #relative_loss = KL_loss(features, targets, person_attributes)
                     loss = self.lamda * center_loss + cross_entropy_loss + relative_loss * self.att_loss_weight
 
-                if (batch + 1) % 200 == 0:
+                if (batch + 1) % 100 == 0:
                     if self.loss == 'softmax':
-                        print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
-                              "{:.8f} - total weighted loss: {:.8f}".format(
+                        print("[{}:{}] cross entropy loss: {:.8f} -"
+                              " - total weighted loss: {:.8f}".format(
                             mode, self.current_epoch,
                             cross_entropy_loss.item(),
-                            center_loss.item(), loss.item()))
+                            loss.item()))
                     elif self.loss == 'center-loss':
                         print("[{}:{}] cross entropy loss: {:.8f} - center loss: "
                               "{:.8f} - total weighted loss: {:.8f}".format(
@@ -216,9 +221,28 @@ class Trainer(object):
                         top1_acc * 100, top3_acc * 100))
 
             if mode == 'validate':
-                # Evaluate on external dataset (e.g. LFW)
-                accuracy, stats_test, stats_train = evaluate_model(model=self.model, test_set_path=self.test_set_path,
-                                                                   pairs_file='datasets/lfw/pairs.txt')
+                #Evaluate on external dataset (e.g. LFW)
+                accuracy, stats_test, stats_train = \
+                    evaluate_model(model=self.model,
+                                   test_set_path=self.cfg_inference['lfw_config']['test_set_path'],
+                                   pairs_file=self.cfg_inference['lfw_config']['pairs_file'])
+
+                print('Model accuracy is {}'.format(accuracy))
+
+                metrics_distance, metrics_rank = \
+                    evaluate_metrics(model=self.model, test_set_name=self.cfg_inference['lfw_config']['test_set_name'],
+                                     test_set_path=self.cfg_inference['lfw_config']['test_set_path'],
+                                     attributes_file=self.cfg_inference['lfw_config']['attributes-file'],
+                                     batch_size=128, device='cuda:0')
+
+                with open("metrics_distance_{0}.json".format(self.current_epoch), "w") as file:
+                    json.dump(metrics_distance, file, cls=NumpyEncoder)
+
+                with open("metrics_rank_{0}.json".format(self.current_epoch), "w") as file:
+                    json.dump(metrics_rank, file, cls=NumpyEncoder)
+
+                #plt.plot(metrics_rank['ranks'][1:10], metrics_rank['att_dist_rank'][1:10])
+                #plt.show()
 
                 for key in accuracy:
                     self.test_stats['acc'][key].append(accuracy[key])

@@ -3,3 +3,5 @@ logs
 *.pth
 datasets
 .idea
+experiments/tmp_data
+*.json
