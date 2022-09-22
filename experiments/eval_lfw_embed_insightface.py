@@ -8,11 +8,8 @@ from eval import eval
 import utils.aux_fun_inference as aux
 
 """ 
-
 This script was used to determine the accuracy of lfw verification task when using the features provided by face_insight
 It confirms that our evaluation scripts are good because the acc=0.995 (the same value reported)
-
-
 """
 
 

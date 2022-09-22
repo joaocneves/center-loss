@@ -7,6 +7,32 @@ from scipy.spatial.distance import squareform, pdist
 from sklearn.metrics import pairwise_distances
 
 
+def fast_matrix_rowcol_distance(x, y):
+    '''
+    Input: x is a Nxd matrix
+           y is an optional Mxd matirx
+    Output: dist is a NxM matrix where dist[i,j] is the square norm between x[i,:] and y[j,:]
+            if y is not given then use 'y=x'.
+    i.e. dist[i,j] = ||x[i,:]-y[j,:]||^2
+    '''
+
+    N, d = x.shape
+    M, d = y.shape
+
+    x_norm = (x ** 2).sum(1)
+    x_norm = np.tile(x_norm, [M, 1]).T
+
+    if y is not None:
+        y_norm = (y ** 2).sum(1)
+        y_norm = np.tile(y_norm, [N, 1])
+    else:
+        y = x
+        y_norm = x_norm.view(1, -1)
+
+    dist = x_norm + y_norm - 2.0 * np.matmul(x, y.T)
+    dist = dist ** 0.5
+    return dist
+
 
 def fast_pairwise_dist(mat, device):
     mat = torch.tensor(mat).to(device)
